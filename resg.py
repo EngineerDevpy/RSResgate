@@ -1,7 +1,6 @@
 import streamlit as st
-import folium
-from streamlit_folium import folium_static
 import geocoder
+import pydeck as pdk
 
 # Título da página
 st.title('Localizador de Localização')
@@ -21,98 +20,72 @@ def get_user_location():
         st.error(f"Erro ao obter localização: {e}")
         return None, None
 
-# Criando um mapa com folium
-m = folium.Map(location=[0, 0], zoom_start=2)  # Mapa inicial com zoom baixo
-
-# Carregando localizações salvas do arquivo
-def load_saved_locations():
-    saved_locations = []
-    try:
-        with open(saved_locations_file, 'r') as file:
-            for line in file:
-                parts = line.strip().split(',')
-                if len(parts) >= 3:
-                    latitude, longitude = float(parts[0]), float(parts[1])
-                    name = ','.join(parts[2:])
-                    saved_locations.append((latitude, longitude, name))
-    except FileNotFoundError:
-        pass  # Arquivo ainda não existe
-
-    return saved_locations
-
-st.session_state.saved_locations = load_saved_locations()
-
 # Obtendo localização atual do usuário ao iniciar o site
 latitude, longitude = get_user_location()
 
-if latitude is not None and longitude is not None:
-    # Adicionando marcador da localização atual
-    folium.Marker(
-        location=[latitude, longitude],
-        popup='Minha Localização',
-        icon=folium.Icon(icon='cloud')
-    ).add_to(m)
+# Criando dados para o marcador da localização atual
+current_marker_data = [{"latitude": latitude, "longitude": longitude, "name": "Minha Localização"}] if latitude is not None and longitude is not None else []
 
-    # Definindo a localização inicial do mapa para a localização atual
-    m.location = [latitude, longitude]
-    m.zoom_start = 12  # Ajusta o zoom para a localização atual
+# Carregando localizações salvas do arquivo
+saved_marker_data = []
+try:
+    with open(saved_locations_file, 'r') as file:
+        for line in file:
+            parts = line.strip().split(',')
+            if len(parts) >= 3:
+                lat, lon, name = float(parts[0]), float(parts[1]), ','.join(parts[2:])
+                saved_marker_data.append({"latitude": lat, "longitude": lon, "name": name})
+except FileNotFoundError:
+    pass
+
+# Combinando dados de marcadores atuais e salvos
+marker_data = current_marker_data + saved_marker_data
+
+if marker_data:
+    # Definindo a visualização inicial do mapa
+    view_state = pdk.ViewState(latitude=latitude, longitude=longitude, zoom=12, bearing=0, pitch=45)
+
+    # Criando a camada de marcadores com tooltip
+    layer = pdk.Layer(
+        "ScatterplotLayer",
+        data=marker_data,
+        get_position=["longitude", "latitude"],
+        get_radius=200,
+        get_fill_color=[255, 0, 0],
+        pickable=True,
+        auto_highlight=True,
+        tooltip={"html": "<b>{name}</b>"}
+    )
+
+    # Criando o mapa interativo com pydeck
+    map = pdk.Deck(
+        layers=[layer],
+        initial_view_state=view_state,
+        map_style="mapbox://styles/mapbox/light-v9"
+    )
+
+    # Exibindo o mapa no Streamlit
+    st.pydeck_chart(map)
 
     # Preenchendo o endereço com a latitude e longitude na barra lateral
     address_input = st.sidebar.text_input('Digite seu endereço (ex: "São Paulo, Brasil")', f'{latitude}, {longitude}', key='address_input')
+
+    # Botão para salvar a localização atual do usuário
+    location_name = st.sidebar.text_input('Nomeie o marcador:', key='location_name_input')
+    if st.sidebar.button('Salvar Localização') and location_name.strip():
+        if latitude is not None and longitude is not None:
+            # Salvando localização no arquivo de localizações salvas
+            with open(saved_locations_file, 'a') as file:
+                file.write(f'{latitude},{longitude},{location_name.strip()}\n')
+            st.sidebar.success('Localização salva com sucesso!')
+
 else:
     st.warning("Localização não encontrada. Verifique se a geolocalização está ativada.")
 
-# Botão para obter a localização atual do usuário
-if st.button('Atualizar Localização', key='update_location_button'):
-    latitude, longitude = get_user_location()
-
-    if latitude is not None and longitude is not None:
-        # Atualizando marcador da localização atual no mapa
-        folium.Marker(
-            location=[latitude, longitude],
-            popup='Minha Localização',
-            icon=folium.Icon(icon='cloud')
-        ).add_to(m)
-
-        # Atualizando localização do mapa para a localização atual
-        m.location = [latitude, longitude]
-        m.zoom_start = 12  # Ajusta o zoom para a localização atual
-
-        # Atualizando o valor da variável associada ao text_input com a nova localização
-        address_input = f'{latitude}, {longitude}'  # Atualiza a variável, não o widget
-
-    else:
-        st.warning("Localização não encontrada. Verifique se a geolocalização está ativada.")
-
-# Campo de texto para nomear o marcador ao salvar a localização
-location_name = st.sidebar.text_input('Nomeie o marcador:', key='location_name_input')
-
-# Botão para salvar a localização atual do usuário
-if st.button('Salvar Localização', key='save_location_button') and location_name.strip():
-    if latitude is not None and longitude is not None:
-        # Adicionando localização à lista de localizações salvas
-        st.session_state.saved_locations.append((latitude, longitude, location_name.strip()))
-        st.success('Localização salva com sucesso!')
-
-        # Salvando localizações no arquivo de texto
-        with open(saved_locations_file, 'a') as file:
-            file.write(f'{latitude},{longitude},{location_name.strip()}\n')
-
-# Exibindo localizações salvas no mapa
-for loc in st.session_state.saved_locations:
-    folium.Marker(
-        location=[loc[0], loc[1]],
-        popup=loc[2],  # Usando o nome como descrição do marcador
-        icon=folium.Icon(icon='star', color='green')
-    ).add_to(m)
-
-# Exibindo o mapa com todas as localizações no Streamlit
-folium_static(m)
-
 # Mostrando localizações salvas no sidebar
-if st.session_state.saved_locations:
+if marker_data:
     st.sidebar.header('Localizações Salvas')
-    for i, loc in enumerate(st.session_state.saved_locations):
-        st.sidebar.write(f"Localização {i+1}: {loc[2]} - Latitude: {loc[0]}, Longitude: {loc[1]}")
+    for i, loc in enumerate(marker_data, 1):
+        st.sidebar.write(f"Localização {i}: {loc['name']} - Latitude: {loc['latitude']}, Longitude: {loc['longitude']}")
 else:
     st.sidebar.info('Nenhuma localização foi salva ainda.')
